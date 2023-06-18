@@ -46,9 +46,9 @@ class ReconnectingWebsocket:
     MAX_QUEUE_SIZE = 100
 
     def __init__(
-        self, url: str, path: Optional[str] = None, prefix: str = 'ws/', is_binary: bool = False, exit_coro=None
+        self, url: str, path: Optional[str] = None, prefix: str = 'ws/', is_binary: bool = False, exit_coro=None, loop=get_loop()
     ):
-        self._loop = get_loop()
+        self._loop = loop
         self._log = logging.getLogger(__name__)
         self._path = path
         self._url = url
@@ -95,7 +95,7 @@ class ReconnectingWebsocket:
         await self._after_connect()
         # To manage the "cannot call recv while another coroutine is already waiting for the next message"
         if not self._handle_read_loop:
-            self._handle_read_loop = self._loop.call_soon_threadsafe(asyncio.create_task, self._read_loop())
+            self._handle_read_loop = self._loop.call_soon_threadsafe(self._loop.create_task, self._read_loop())
 
     async def _kill_read_loop(self):
         self.ws_state = WSListenerState.EXITING
@@ -225,9 +225,9 @@ class KeepAliveWebsocket(ReconnectingWebsocket):
 
     def __init__(
         self, client: AsyncClient, url, keepalive_type, prefix='ws/', is_binary=False, exit_coro=None,
-        user_timeout=None
+        user_timeout=None, loop=get_loop()
     ):
-        super().__init__(path=None, url=url, prefix=prefix, is_binary=is_binary, exit_coro=exit_coro)
+        super().__init__(path=None, url=url, prefix=prefix, is_binary=is_binary, exit_coro=exit_coro, loop=loop)
         self._keepalive_type = keepalive_type
         self._client = client
         self._user_timeout = user_timeout or KEEPALIVE_TIMEOUT
@@ -251,7 +251,7 @@ class KeepAliveWebsocket(ReconnectingWebsocket):
     def _start_socket_timer(self):
         self._timer = self._loop.call_later(
             self._user_timeout,
-            lambda: asyncio.create_task(self._keepalive_socket())
+            lambda: self._loop.create_task(self._keepalive_socket())
         )
 
     async def _get_listen_key(self):
@@ -308,7 +308,7 @@ class BinanceSocketManager:
     WEBSOCKET_DEPTH_10 = '10'
     WEBSOCKET_DEPTH_20 = '20'
 
-    def __init__(self, client: AsyncClient, user_timeout=KEEPALIVE_TIMEOUT):
+    def __init__(self, client: AsyncClient, user_timeout=KEEPALIVE_TIMEOUT, loop=get_loop()):
         """Initialise the BinanceSocketManager
 
         :param client: Binance API client
@@ -322,7 +322,7 @@ class BinanceSocketManager:
         self.VSTREAM_TESTNET_URL = self.VSTREAM_TESTNET_URL.format(client.tld)
 
         self._conns = {}
-        self._loop = get_loop()
+        self._loop = loop
         self._client = client
         self._user_timeout = user_timeout
 
@@ -347,7 +347,8 @@ class BinanceSocketManager:
                 url=self._get_stream_url(stream_url),
                 prefix=prefix,
                 exit_coro=self._exit_socket,
-                is_binary=is_binary
+                is_binary=is_binary,
+                loop=self._loop,
             )
 
         return self._conns[conn_id]
@@ -364,7 +365,8 @@ class BinanceSocketManager:
                 prefix=prefix,
                 exit_coro=self._exit_socket,
                 is_binary=is_binary,
-                user_timeout=self._user_timeout
+                user_timeout=self._user_timeout,
+                loop=self._loop,
             )
 
         return self._conns[conn_id]
@@ -1221,7 +1223,7 @@ class ThreadedWebsocketManager(ThreadedApiManager):
         socket = getattr(self._bsm, socket_name)(**params)
         socket_path: str = path or socket._path  # noqa
         self._socket_running[socket_path] = True
-        self._loop.call_soon_threadsafe(asyncio.create_task, self.start_listener(socket, socket_path, callback))
+        self._loop.call_soon_threadsafe(self._loop.create_task, self.start_listener(socket, socket_path, callback))
         return socket_path
 
     def start_depth_socket(
